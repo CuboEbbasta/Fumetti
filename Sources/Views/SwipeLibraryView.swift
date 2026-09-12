@@ -1,31 +1,34 @@
 import SwiftUI
 import UIKit
 
-/// Homepage della libreria secondo la regola di navigazione (vedi 07_LEGGIMI_NAVIGAZIONE.md):
-/// ogni schermata rappresenta UN contesto (una cartella).
+/// Homepage della libreria secondo la specifica estetica/di navigazione (vedi
+/// 08_LEGGIMI_NAVIGAZIONE_V2.md). Ogni schermata rappresenta UN contesto (una cartella):
 ///
-/// - Verticale: scorre il contenuto del contesto corrente ("Continua a leggere" su tutta la
-///   libreria, poi "Serie" e "Fumetti" del contesto corrente, in gruppi separati).
-/// - Orizzontale: passa al contesto "fratello" successivo/precedente (stessa profondità, stesso
-///   genitore) — sia con lo swipe sia con le frecce ai lati, per rendere l'interazione più chiara.
-/// - Toccare una sottocartella: il suo contenuto diventa il nuovo contesto.
-/// - Toccare un segmento del percorso in basso: si risale direttamente a quel livello.
-/// - Tenere premuto su una copertina: segna come letto, nascondi (Incognito), statistiche.
+/// - Titolo in alto = nome del contesto corrente.
+/// - "Continua a leggere" compare SOLO alla radice, su tutta la libreria.
+/// - Sotto, i fumetti diretti del contesto corrente (mai le sottocartelle mostrate come griglia:
+///   niente sezione "Serie").
+/// - In fondo, un'area semi-trasparente mostra la PRIMA sottocartella: tocco o swipe verso il
+///   basso per entrarci.
+/// - Swipe orizzontale (o le frecce in basso) passa al contesto fratello successivo/precedente.
+/// - Swipe verso l'alto (o il pulsante indietro) risale al genitore.
+/// - Percorso e pulsante aggiorna sempre visibili in basso.
 struct SwipeLibraryView: View {
     @StateObject private var navModel: SwipeLibraryViewModel
     let libraryRootURL: URL
     let settings: AppSettings
+    let onRefresh: () async -> Void
 
     @State private var dragTranslation: CGSize = .zero
     @State private var openedComic: ComicFile?
 
-    /// Quanto si intravede, in punti, di ogni fratello adiacente quando fermi.
     private let peekSize: CGFloat = 40
 
-    init(rootFolder: ComicFolder, libraryRootURL: URL, settings: AppSettings) {
+    init(rootFolder: ComicFolder, libraryRootURL: URL, settings: AppSettings, onRefresh: @escaping () async -> Void) {
         _navModel = StateObject(wrappedValue: SwipeLibraryViewModel(rootFolder: rootFolder))
         self.libraryRootURL = libraryRootURL
         self.settings = settings
+        self.onRefresh = onRefresh
     }
 
     private var horizontalDrag: CGFloat {
@@ -48,29 +51,12 @@ struct SwipeLibraryView: View {
                         .offset(x: (proxy.size.width - peekSize) + horizontalDrag)
                 }
 
-                contentScrollView
-                    .offset(x: horizontalDrag)
-
-                // Frecce esplicite, oltre allo swipe: rendono l'interazione chiara anche senza
-                // scoprirla per tentativi.
-                VStack {
-                    Spacer()
-                    HStack {
-                        if navModel.previousSiblingContext != nil {
-                            navArrow(systemImage: "chevron.left") {
-                                withAnimation(navAnimation) { navModel.moveToPreviousSiblingContext() }
-                            }
-                        }
-                        Spacer()
-                        if navModel.nextSiblingContext != nil {
-                            navArrow(systemImage: "chevron.right") {
-                                withAnimation(navAnimation) { navModel.moveToNextSiblingContext() }
-                            }
-                        }
-                    }
-                    .padding(.horizontal, 10)
-                    Spacer()
+                VStack(spacing: 0) {
+                    titleHeader
+                    contentScrollView
+                    bottomBar
                 }
+                .offset(x: horizontalDrag)
             }
             .clipped()
             .simultaneousGesture(
@@ -84,47 +70,58 @@ struct SwipeLibraryView: View {
         }
     }
 
-    private func navArrow(systemImage: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: systemImage)
-                .font(.title3.bold())
-                .foregroundStyle(.white)
-                .padding(10)
-                .background(.ultraThinMaterial, in: Circle())
+    // MARK: - Titolo (nome del contesto corrente)
+
+    private var titleHeader: some View {
+        VStack(spacing: 6) {
+            HStack {
+                if navModel.canGoUp {
+                    Color.clear.frame(width: 28, height: 28)
+                }
+                Spacer()
+                Text(navModel.containerFolder.name.isEmpty ? "Libreria" : navModel.containerFolder.name)
+                    .font(.title.bold())
+                    .foregroundStyle(.white)
+                Spacer()
+                if navModel.canGoUp {
+                    Button { withAnimation(navAnimation) { navModel.goUp() } } label: {
+                        Image(systemName: "chevron.up.circle.fill")
+                            .font(.title2)
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                }
+            }
+            Rectangle().fill(DarkTheme.accent).frame(width: 40, height: 3)
         }
+        .padding(.horizontal)
+        .padding(.top, 12)
     }
 
-    // MARK: - Contenuto del contesto corrente
+    // MARK: - Contenuto scorrevole
 
     private var contentScrollView: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 30) {
-                breadcrumbView
-
-                if !navModel.continueReadingComics.isEmpty {
+                if navModel.isRoot, !navModel.continueReadingComics.isEmpty {
                     sectionHeader(title: "Continua a leggere")
                     continueReadingRow
                 }
 
-                if navModel.isEmpty {
-                    if navModel.continueReadingComics.isEmpty {
-                        ContentUnavailableView("Vuota", systemImage: "tray")
-                            .foregroundStyle(.white)
-                            .padding(.top, 60)
-                    }
-                } else {
-                    if !navModel.subContainers.isEmpty {
-                        sectionHeader(title: "Serie")
-                        containerGrid
-                    }
-                    if !navModel.directComics.isEmpty {
-                        sectionHeader(title: "Fumetti")
-                        comicGrid
-                    }
+                if !navModel.directComics.isEmpty {
+                    sectionHeader(title: navModel.containerFolder.name.isEmpty ? "Fumetti" : navModel.containerFolder.name.uppercased())
+                    comicGrid
+                } else if navModel.isEmpty {
+                    ContentUnavailableView("Vuota", systemImage: "tray")
+                        .foregroundStyle(.white)
+                        .padding(.top, 40)
+                }
+
+                if let firstSubfolder = navModel.firstSubfolder {
+                    firstSubfolderPreview(firstSubfolder)
                 }
             }
             .padding()
-            .padding(.bottom, 40)
+            .padding(.bottom, 20)
         }
         .background(Color.black)
     }
@@ -142,27 +139,6 @@ struct SwipeLibraryView: View {
         }
     }
 
-    private var breadcrumbView: some View {
-        HStack(spacing: 4) {
-            ForEach(Array(navModel.breadcrumbPath.enumerated()), id: \.element.id) { index, folder in
-                Button {
-                    navModel.goUp(to: folder)
-                } label: {
-                    Text(folder.name.isEmpty ? "Libreria" : folder.name)
-                        .font(index == navModel.breadcrumbPath.count - 1 ? .title.bold() : .footnote)
-                        .foregroundStyle(index == navModel.breadcrumbPath.count - 1 ? .white : .white.opacity(0.45))
-                }
-                .buttonStyle(.plain)
-                if index < navModel.breadcrumbPath.count - 1 {
-                    Image(systemName: "chevron.right")
-                        .font(.caption2)
-                        .foregroundStyle(.white.opacity(0.3))
-                }
-            }
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
     private func sectionHeader(title: String) -> some View {
         HStack(spacing: 12) {
             Text(title)
@@ -172,20 +148,54 @@ struct SwipeLibraryView: View {
         }
     }
 
-    private var containerGrid: some View {
-        TileGrid(items: navModel.subContainers) { folder in
-            ContainerTile(folder: folder, libraryRootURL: libraryRootURL) {
-                withAnimation(navAnimation) { navModel.enter(folder: folder) }
-            }
-        }
-    }
-
     private var comicGrid: some View {
         TileGrid(items: navModel.directComics) { comic in
             ComicTile(comic: comic, libraryRootURL: libraryRootURL) {
                 openedComic = comic
             }
         }
+    }
+
+    // MARK: - Anteprima prima sottocartella (asse verticale, verso il basso)
+
+    private func firstSubfolderPreview(_ folder: ComicFolder) -> some View {
+        Button {
+            withAnimation(navAnimation) { navModel.enterFirstSubfolder() }
+        } label: {
+            VStack(spacing: 10) {
+                HStack {
+                    Rectangle().fill(Color.white.opacity(0.12)).frame(height: 1)
+                    Text("PRIMA SOTTOCARTELLA")
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(.white.opacity(0.35))
+                    Rectangle().fill(Color.white.opacity(0.12)).frame(height: 1)
+                }
+                HStack(spacing: 14) {
+                    Image(systemName: "chevron.down")
+                        .foregroundStyle(DarkTheme.accent)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(folder.name)
+                            .font(.headline)
+                            .foregroundStyle(.white.opacity(0.85))
+                        Text("\(folder.totalComicCount) elementi")
+                            .font(.caption)
+                            .foregroundStyle(.white.opacity(0.4))
+                    }
+                    Spacer()
+                }
+                .padding(14)
+                .background(Color.white.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
+            }
+        }
+        .buttonStyle(.plain)
+        .simultaneousGesture(
+            DragGesture(minimumDistance: 20)
+                .onEnded { value in
+                    if value.translation.height > 40 {
+                        withAnimation(navAnimation) { navModel.enterFirstSubfolder() }
+                    }
+                }
+        )
     }
 
     private func siblingPeek(_ folder: ComicFolder) -> some View {
@@ -198,20 +208,87 @@ struct SwipeLibraryView: View {
                 .foregroundStyle(.white.opacity(0.3))
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 30)
+            Text("\(folder.totalComicCount) elementi")
+                .font(.caption)
+                .foregroundStyle(.white.opacity(0.2))
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Color.white.opacity(0.02))
     }
 
+    // MARK: - Barra in basso: aggiorna, percorso, precedente/successivo
+
+    private var bottomBar: some View {
+        HStack {
+            Button { Task { await onRefresh() } } label: {
+                Image(systemName: "arrow.clockwise")
+                    .foregroundStyle(.white.opacity(0.7))
+            }
+
+            Spacer()
+
+            breadcrumbView
+
+            Spacer()
+
+            HStack(spacing: 18) {
+                Button {
+                    guard navModel.previousSiblingContext != nil else { return }
+                    withAnimation(navAnimation) { navModel.moveToPreviousSiblingContext() }
+                } label: {
+                    Label("Precedente", systemImage: "chevron.left")
+                        .labelStyle(.iconOnly)
+                }
+                .opacity(navModel.previousSiblingContext != nil ? 1 : 0.25)
+
+                Button {
+                    guard navModel.nextSiblingContext != nil else { return }
+                    withAnimation(navAnimation) { navModel.moveToNextSiblingContext() }
+                } label: {
+                    Label("Successivo", systemImage: "chevron.right")
+                        .labelStyle(.iconOnly)
+                }
+                .opacity(navModel.nextSiblingContext != nil ? 1 : 0.25)
+            }
+            .foregroundStyle(.white.opacity(0.7))
+        }
+        .padding(.horizontal, 18)
+        .padding(.vertical, 10)
+        .background(.ultraThinMaterial.opacity(0.6))
+    }
+
+    private var breadcrumbView: some View {
+        HStack(spacing: 4) {
+            ForEach(Array(navModel.breadcrumbPath.enumerated()), id: \.element.id) { index, folder in
+                Button { navModel.goUp(to: folder) } label: {
+                    Text(folder.name.isEmpty ? "Libreria" : folder.name)
+                        .font(.caption)
+                        .foregroundStyle(.white.opacity(index == navModel.breadcrumbPath.count - 1 ? 0.7 : 0.4))
+                }
+                .buttonStyle(.plain)
+                if index < navModel.breadcrumbPath.count - 1 {
+                    Text("/").font(.caption2).foregroundStyle(.white.opacity(0.25))
+                }
+            }
+        }
+        .lineLimit(1)
+    }
+
+    // MARK: - Gesto
+
     private func handleDragEnd(_ translation: CGSize, containerWidth: CGFloat) {
-        let threshold = containerWidth * 0.22
+        let horizontalThreshold = containerWidth * 0.22
         if abs(translation.width) > abs(translation.height) {
-            if translation.width < -threshold, navModel.nextSiblingContext != nil {
+            if translation.width < -horizontalThreshold, navModel.nextSiblingContext != nil {
                 withAnimation(navAnimation) { navModel.moveToNextSiblingContext(); dragTranslation = .zero }
                 return
-            } else if translation.width > threshold, navModel.previousSiblingContext != nil {
+            } else if translation.width > horizontalThreshold, navModel.previousSiblingContext != nil {
                 withAnimation(navAnimation) { navModel.moveToPreviousSiblingContext(); dragTranslation = .zero }
                 return
             }
+        } else if translation.height < -80, navModel.canGoUp {
+            withAnimation(navAnimation) { navModel.goUp(); dragTranslation = .zero }
+            return
         }
         withAnimation(.spring(response: 0.35, dampingFraction: 0.8)) {
             dragTranslation = .zero
@@ -232,12 +309,6 @@ private struct TileGrid<Item: Identifiable, Content: View>: View {
         self.content = content
     }
 
-    /// Una riga della griglia, con un'identità derivata dagli ID veri degli elementi che
-    /// contiene (non dalla posizione): è la correzione al bug delle copertine che si
-    /// "sovrapponevano" cambiando cartella. Usare l'indice come identità (com'era prima) fa
-    /// sì che SwiftUI consideri "la stessa riga" due righe in cartelle diverse che occupano
-    /// semplicemente la stessa posizione (es. sempre "riga 1"), riciclando la vista — con la
-    /// copertina già caricata della cartella precedente — invece di ricrearla da capo.
     private struct Row: Identifiable {
         let id: String
         let items: [Item]
@@ -270,54 +341,6 @@ private struct TileGrid<Item: Identifiable, Content: View>: View {
 }
 
 // MARK: - Tessere
-
-private struct ContainerTile: View {
-    let folder: ComicFolder
-    let libraryRootURL: URL
-    let onSelect: () -> Void
-    @ObservedObject private var incognitoStore = IncognitoStore.shared
-    @State private var cover: UIImage?
-
-    private var isHidden: Bool { incognitoStore.isHidden(folder.relativePath) }
-
-    var body: some View {
-        Button(action: onSelect) {
-            VStack(spacing: 8) {
-                Group {
-                    if let cover {
-                        Image(uiImage: cover).resizable().scaledToFill()
-                    } else {
-                        RoundedRectangle(cornerRadius: 10).fill(Color.white.opacity(0.07))
-                            .overlay(Image(systemName: "books.vertical.fill").foregroundStyle(.white.opacity(0.4)))
-                    }
-                }
-                .aspectRatio(0.68, contentMode: .fit)
-                .clipShape(RoundedRectangle(cornerRadius: 10))
-                .opacity(isHidden ? 0.4 : 1)
-
-                Text(folder.name)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(.white)
-                    .lineLimit(1)
-                Text("\(folder.totalComicCount) fumetti")
-                    .font(.caption2)
-                    .foregroundStyle(.white.opacity(0.5))
-            }
-        }
-        .buttonStyle(.plain)
-        .task {
-            guard let representative = folder.representativeComic else { return }
-            cover = await CoverCache.coverImage(for: representative, libraryRootURL: libraryRootURL)
-        }
-        .contextMenu {
-            Button {
-                incognitoStore.toggleHidden(folder.relativePath)
-            } label: {
-                Label(isHidden ? "Mostra (togli da Incognito)" : "Nascondi cartella (Incognito)", systemImage: isHidden ? "eye" : "eye.slash")
-            }
-        }
-    }
-}
 
 private struct ComicTile: View {
     let comic: ComicFile
@@ -399,17 +422,15 @@ private struct ComicTile: View {
     }
 }
 
-/// Tessera più piccola per "Continua a leggere" (che mostra fumetti di tutta la libreria, non
-/// del contesto corrente): copertina, titolo, percentuale.
 private struct ContinueReadingTile: View {
     let comic: ComicFile
     let libraryRootURL: URL
     @ObservedObject private var progressStore = ReadingProgressStore.shared
     @State private var cover: UIImage?
     @State private var resolvedTitle: String?
+    private let tileWidth: CGFloat = 130
 
     private var progress: ReadingProgress? { progressStore.progress(for: comic.relativePath) }
-    private let tileWidth: CGFloat = 110
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -430,14 +451,20 @@ private struct ContinueReadingTile: View {
                 .lineLimit(1)
                 .frame(width: tileWidth, alignment: .leading)
 
-            if let progress, progress.fraction > 0 {
-                HStack(spacing: 4) {
-                    ProgressView(value: progress.fraction).tint(.white)
-                    Text("\(Int(progress.fraction * 100))%")
-                        .font(.system(size: 9))
-                        .foregroundStyle(.white.opacity(0.6))
+            if let progress {
+                Text("Pag. \(progress.currentPage + 1)/\(max(progress.totalPages, 1))")
+                    .font(.system(size: 9))
+                    .foregroundStyle(.white.opacity(0.5))
+                    .frame(width: tileWidth, alignment: .leading)
+                if progress.fraction > 0 {
+                    HStack(spacing: 4) {
+                        ProgressView(value: progress.fraction).tint(.white)
+                        Text("\(Int(progress.fraction * 100))%")
+                            .font(.system(size: 9))
+                            .foregroundStyle(.white.opacity(0.6))
+                    }
+                    .frame(width: tileWidth)
                 }
-                .frame(width: tileWidth)
             }
         }
         .task {
