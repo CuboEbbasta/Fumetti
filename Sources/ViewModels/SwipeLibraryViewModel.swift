@@ -1,20 +1,20 @@
 import Foundation
 
 /// Tiene traccia del "contesto" corrente (una cartella dell'albero) e di come muoversi tra
-/// contesti. Regola di navigazione (vedi 07_LEGGIMI_NAVIGAZIONE.md per i dettagli):
+/// contesti. Regola di navigazione (vedi 08_LEGGIMI_NAVIGAZIONE_V2.md):
 ///
-/// - **verticale**: esplora il contenuto del contesto corrente (i suoi fumetti e sotto-cartelle,
-///   mostrati insieme in una griglia scorrevole) — non cambia la posizione nell'albero.
-/// - **orizzontale**: cambia contesto spostandosi tra "fratelli" (altri figli dello stesso
-///   genitore), mantenendo la stessa profondità — es. da "Manga" a "Marvel", se entrambi sono
-///   sottocartelle dirette della stessa cartella principale.
-/// - **selezionare un elemento della griglia** (tocco): se è una sottocartella, il suo contenuto
-///   diventa il nuovo contesto (si "entra"); se è un fumetto, si apre nel lettore.
-/// - **toccare un segmento del percorso in basso**: si risale direttamente a quel livello.
+/// - **orizzontale (sinistra/destra)**: cambia contesto spostandosi tra "fratelli" (altri figli
+///   dello stesso genitore), mantenendo la stessa profondità. Caso speciale della radice (che
+///   non ha fratelli veri, essendo in cima): l'orizzontale mostra i SUOI figli — così da "prima
+///   di tutti" (radice) avanzando si entra nel primo figlio, e da lì in poi ci si muove tra i
+///   figli come fratelli normali.
+/// - **verticale in basso**: entra nella prima sottocartella (mostrata come una superficie che
+///   "emerge" in fondo allo schermo, non come una griglia di cartelle).
+/// - **verticale in alto / pulsante indietro**: risale alla cartella genitore.
+/// - **toccare un segnalibro nel percorso in basso**: risale direttamente a quel livello.
 ///
-/// Sempre basato sull'albero vero già scansionato una volta sola (non si riscansiona il
-/// filesystem durante la navigazione): cambiare contesto significa solo cambiare quale
-/// ComicFolder è "corrente", l'albero in memoria resta lo stesso.
+/// Sempre basato sull'albero vero già scansionato una volta sola: cambiare contesto significa
+/// solo cambiare quale ComicFolder è "corrente", non si riscansiona mai il filesystem.
 @MainActor
 final class SwipeLibraryViewModel: ObservableObject {
     @Published private(set) var containerFolder: ComicFolder
@@ -27,10 +27,10 @@ final class SwipeLibraryViewModel: ObservableObject {
         self.progressStore = progressStore
     }
 
-    // MARK: - Continua a leggere (su tutta la libreria, non solo il contesto corrente)
+    var isRoot: Bool { containerFolder.parent == nil }
 
-    /// Fumetti in corso (iniziati, non finiti) in tutta la libreria, dal più recente. Non tiene
-    /// conto di dove si trovano nell'albero: "continua a leggere" guarda sempre a tutto.
+    // MARK: - Continua a leggere (solo alla radice, su tutta la libreria)
+
     var continueReadingComics: [ComicFile] {
         let inProgress = progressStore.progress.values.filter { !$0.isCompleted && $0.currentPage > 0 }
         let sortedPaths = inProgress
@@ -40,31 +40,58 @@ final class SwipeLibraryViewModel: ObservableObject {
         return sortedPaths.compactMap { byPath[$0] }
     }
 
-    // MARK: - Contenuto del contesto corrente (asse verticale)
+    // MARK: - Contenuto diretto del contesto corrente
 
-    var subContainers: [ComicFolder] { containerFolder.subfolders }
     var directComics: [ComicFile] { containerFolder.comics }
-    var isEmpty: Bool { subContainers.isEmpty && directComics.isEmpty }
+    var isEmpty: Bool { directComics.isEmpty && containerFolder.subfolders.isEmpty }
 
-    // MARK: - Fratelli del contesto corrente (asse orizzontale)
+    // MARK: - Prima sottocartella (asse verticale, verso il basso)
 
-    private var siblingContexts: [ComicFolder] {
-        guard let parent = containerFolder.parent else { return [containerFolder] }
+    var firstSubfolder: ComicFolder? { containerFolder.subfolders.first }
+
+    func enterFirstSubfolder() {
+        guard let first = firstSubfolder else { return }
+        containerFolder = first
+    }
+
+    // MARK: - Risalita (asse verticale, verso l'alto)
+
+    var canGoUp: Bool { containerFolder.parent != nil }
+
+    func goUp() {
+        guard let parent = containerFolder.parent else { return }
+        containerFolder = parent
+    }
+
+    func goUp(to ancestor: ComicFolder) {
+        containerFolder = ancestor
+    }
+
+    // MARK: - Fratelli (asse orizzontale)
+
+    private var horizontalItems: [ComicFolder] {
+        if isRoot { return containerFolder.subfolders }
+        guard let parent = containerFolder.parent else { return [] }
         return parent.subfolders
     }
 
-    private var currentSiblingIndex: Int? {
-        siblingContexts.firstIndex { $0.id == containerFolder.id }
+    /// -1 quando siamo alla radice ("prima" di ogni figlio): così avanzare di uno porta al
+    /// primo figlio, in modo uniforme con la logica usata per i fratelli normali.
+    private var horizontalCurrentIndex: Int {
+        guard !isRoot else { return -1 }
+        return horizontalItems.firstIndex { $0.id == containerFolder.id } ?? -1
     }
 
     var previousSiblingContext: ComicFolder? {
-        guard let index = currentSiblingIndex, index > 0 else { return nil }
-        return siblingContexts[index - 1]
+        let idx = horizontalCurrentIndex - 1
+        guard horizontalItems.indices.contains(idx) else { return nil }
+        return horizontalItems[idx]
     }
 
     var nextSiblingContext: ComicFolder? {
-        guard let index = currentSiblingIndex, index + 1 < siblingContexts.count else { return nil }
-        return siblingContexts[index + 1]
+        let idx = horizontalCurrentIndex + 1
+        guard horizontalItems.indices.contains(idx) else { return nil }
+        return horizontalItems[idx]
     }
 
     func moveToPreviousSiblingContext() {
@@ -77,18 +104,8 @@ final class SwipeLibraryViewModel: ObservableObject {
         containerFolder = next
     }
 
-    // MARK: - Cambio di profondità
+    // MARK: - Percorso
 
-    func enter(folder: ComicFolder) {
-        containerFolder = folder
-    }
-
-    func goUp(to ancestor: ComicFolder) {
-        containerFolder = ancestor
-    }
-
-    /// Percorso dalla radice al contesto corrente: ogni elemento è toccabile per risalire
-    /// direttamente a quel livello.
     var breadcrumbPath: [ComicFolder] {
         var path: [ComicFolder] = []
         var node: ComicFolder? = containerFolder
