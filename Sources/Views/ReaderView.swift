@@ -410,22 +410,46 @@ private struct PageFilmstrip: View {
     let onSelectPage: (Int) -> Void
     @ObservedObject private var progressStore = ReadingProgressStore.shared
 
+    /// Le stesse coppie (spread) usate dal lettore quando il layout è "due pagine": qui servono
+    /// solo per raggrupparle visivamente nella filmstrip, ogni miniatura resta comunque
+    /// selezionabile singolarmente.
+    private var groups: [[Int]] {
+        let pageCount = viewModel.visualIndices.count
+        guard viewModel.layout == .double, pageCount > 1 else { return (0..<pageCount).map { [$0] } }
+        var result: [[Int]] = []
+        var i = 0
+        while i < pageCount {
+            if i + 1 < pageCount { result.append([i, i + 1]); i += 2 } else { result.append([i]); i += 1 }
+        }
+        return result
+    }
+
     var body: some View {
         ScrollViewReader { proxy in
             ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 8) {
-                    ForEach(0..<(viewModel.document?.pageCount ?? 0), id: \.self) { index in
-                        Button {
-                            onSelectPage(index)
-                        } label: {
-                            PageThumbnailCell(
-                                viewModel: viewModel, pageIndex: index,
-                                isCurrent: index == viewModel.currentPage,
-                                isBookmarked: progressStore.bookmarks(for: viewModel.comic.relativePath).contains { $0.pageIndex == index }
-                            )
+                HStack(spacing: 14) {
+                    ForEach(Array(groups.enumerated()), id: \.offset) { _, positions in
+                        let documentIndices = positions.map { viewModel.displayPage(at: $0) }
+                        HStack(spacing: 3) {
+                            ForEach(documentIndices, id: \.self) { index in
+                                Button {
+                                    onSelectPage(index)
+                                } label: {
+                                    PageThumbnailCell(
+                                        viewModel: viewModel, pageIndex: index,
+                                        isCurrent: index == viewModel.currentPage,
+                                        isBookmarked: progressStore.bookmarks(for: viewModel.comic.relativePath).contains { $0.pageIndex == index }
+                                    )
+                                }
+                                .buttonStyle(.plain)
+                                .id(index)
+                            }
                         }
-                        .buttonStyle(.plain)
-                        .id(index)
+                        .padding(4)
+                        .background(
+                            documentIndices.count > 1 ? Color.white.opacity(0.08) : Color.clear,
+                            in: RoundedRectangle(cornerRadius: 6)
+                        )
                     }
                 }
                 .padding(.horizontal, 14)

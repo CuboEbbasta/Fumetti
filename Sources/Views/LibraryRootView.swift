@@ -33,7 +33,12 @@ struct LibraryRootView: View {
                         ContentUnavailableView("Nessun fumetto trovato", systemImage: "tray", description: Text("Aggiungi dei file .cbz, .pdf o .epub nella cartella scelta."))
                             .foregroundStyle(.white)
                     } else {
-                        SwipeLibraryView(rootFolder: root, libraryRootURL: fileSystemManager.libraryRootURL!, settings: appSettings)
+                        SwipeLibraryView(
+                            rootFolder: root,
+                            libraryRootURL: fileSystemManager.libraryRootURL!,
+                            settings: appSettings,
+                            onRefresh: refresh
+                        )
                     }
                 } else {
                     ProgressView().tint(.white)
@@ -46,20 +51,13 @@ struct LibraryRootView: View {
                     incognitoBanner
                 }
             }
-            .navigationTitle("FumettiReader")
+            .navigationTitle("")
             .navigationBarTitleDisplayMode(.inline)
             .toolbarColorScheme(.dark, for: .navigationBar)
             .toolbarBackground(Color.black, for: .navigationBar)
             .toolbarBackground(.visible, for: .navigationBar)
             .toolbar {
-                // Un solo modo per aggiornare (il tasto): niente più anche pull-to-refresh insieme.
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button {
-                        Task { await refresh() }
-                    } label: {
-                        Image(systemName: "arrow.clockwise")
-                    }
-                }
+                // Il tasto aggiorna è ora nella barra in basso, dentro SwipeLibraryView.
                 ToolbarItem(placement: .topBarLeading) {
                     Button { showSettings = true } label: { Image(systemName: "gearshape.fill") }
                 }

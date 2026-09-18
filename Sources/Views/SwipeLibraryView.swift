@@ -196,6 +196,14 @@ struct SwipeLibraryView: View {
                     }
                 }
         )
+        .contextMenu {
+            Button {
+                IncognitoStore.shared.toggleHidden(folder.relativePath)
+            } label: {
+                let isHidden = IncognitoStore.shared.isHidden(folder.relativePath)
+                Label(isHidden ? "Mostra cartella (togli da Incognito)" : "Nascondi cartella (Incognito)", systemImage: isHidden ? "eye" : "eye.slash")
+            }
+        }
     }
 
     private func siblingPeek(_ folder: ComicFolder) -> some View {
