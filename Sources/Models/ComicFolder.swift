@@ -68,4 +68,23 @@ final class ComicFolder: Identifiable, Hashable {
         }
         return nil
     }
+
+    /// Fino a `limit` fumetti rappresentativi, per un piccolo mosaico di copertine invece di
+    /// una sola: usato dal carosello spaziale ai lati/in basso, dove si deve intravedere
+    /// davvero il contenuto della cartella adiacente, non solo il suo nome.
+    func representativeComics(limit: Int) -> [ComicFile] {
+        var result: [ComicFile] = []
+        func visit(_ folder: ComicFolder) {
+            for comic in folder.comics {
+                guard result.count < limit else { return }
+                result.append(comic)
+            }
+            for subfolder in folder.subfolders {
+                guard result.count < limit else { return }
+                visit(subfolder)
+            }
+        }
+        visit(self)
+        return result
+    }
 }
